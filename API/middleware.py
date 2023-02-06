@@ -14,7 +14,9 @@ class JWTAuthenticateMiddleware:
         
         # APIs going through middleware
         self.allowed_apis = [
-            
+            "manage-timetable",
+            "manage-student",
+            "get-students"
         ]
     
     def __call__(self,request):

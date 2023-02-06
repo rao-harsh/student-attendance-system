@@ -73,3 +73,59 @@ def login(request):
     else:
         return JsonResponse(data={"message":"Didn't Receive Login Data"},status = status.HTTP_400_BAD_REQUEST)
 
+@api_view(["POST","GET","PATCH"])
+def manage_student(request,id):
+    if request.method == "POST":
+        college_admin = database["User"].find_one(filter={"_id":request.id,"role":request.role})
+        
+        if college_admin["role"] == "college-admin" and college_admin["_id"] == request.id:
+            data = request.data if request.data is not None else {}
+            if id is not None:
+                print(id)
+                user = database["User"].find_one(filter={"_id":id,"role":"Student"})
+                data["_id"] = create_unique_object_id()
+                data["User_ID"] = id
+                student_fields = ("gr_number","roll_number","admission_date","admission_valid_date","division_id")
+                for field in student_fields:
+                    if field in data:
+                        continue
+                    else:
+                        return JsonResponse(data={"message":"Wrong Data Provided"},status=status.HTTP_400_BAD_REQUEST)
+                database["Student"].insert_one(data)
+                return JsonResponse(data={"user":user},status=status.HTTP_201_CREATED)
+            else:
+                return JsonResponse(data={"message":"Didn't receive student data"})
+            return JsonResponse(data=data,status=status.HTTP_200_OK)
+        pass
+    elif request.method == "PATCH":
+        college_admin = database["User"].find_one(filter={"_id":request.id,"role":request.role})
+        if college_admin["role"] == "college-admin" and college_admin["_id"] == request.id:
+            data = request.data if request.data is not None else {}
+            if id is not None and data is not None:
+                print(id)
+                user = database["Student"].find_one(filter={"_id":id})
+                if user:
+                    newValues = {"$set":data}
+                    print(newValues)
+                    database["Student"].update_one(filter={"_id":id},update=newValues)
+                    return JsonResponse(data=user)
+                else:
+                    return JsonResponse(data={"message":"Student Not found"})
+    elif request.method == "GET":
+        user = database["User"].find_one(filter={"_id":request.id,"role":request.role})
+        
+        if user["role"] == "college-admin" and user["_id"] == request.id:
+            data = database["User"].find(filter={"role":"Student"})
+            data = [i for i in data]
+            return JsonResponse(data=data,status=status.HTTP_200_OK,safe=False)
+
+def get_students(request):
+    user = database["User"].find_one(filter={"_id":request.id,"role":request.role})
+
+    if user["role"] == "college-admin" and user["_id"] == request.id:
+        data = database["User"].find(filter={"role":"Student"})
+        data = [i for i in data]
+        return JsonResponse(data=data,status=status.HTTP_200_OK,safe=False)
+    else:
+        return JsonResponse(data={"message":"User not Authorized"},status=status.HTTP_401_UNAUTHORIZED)
+    
