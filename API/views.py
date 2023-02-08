@@ -10,8 +10,19 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import api_view
 from rest_framework import status
 import time
-
+from deepface import DeepFace
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import json
 # Create your views here.
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self,obj):
+        if isinstance(obj,np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self,obj)
+
 
 
 @api_view(["POST"])
@@ -108,7 +119,9 @@ def manage_student(request,id):
                     newValues = {"$set":data}
                     print(newValues)
                     database["Student"].update_one(filter={"_id":id},update=newValues)
-                    return JsonResponse(data=user)
+                    newData = database["Student"].find_one(filter={"_id":id})
+                    print(newData)
+                    return JsonResponse(data=newData)
                 else:
                     return JsonResponse(data={"message":"Student Not found"})
     elif request.method == "GET":
@@ -128,4 +141,34 @@ def get_students(request):
         return JsonResponse(data=data,status=status.HTTP_200_OK,safe=False)
     else:
         return JsonResponse(data={"message":"User not Authorized"},status=status.HTTP_401_UNAUTHORIZED)
-    
+
+@api_view(["POST"])
+def register_face(request,id):
+    if request.method == "POST":
+        data = request.data if request.data is not None else {}
+        image = request.FILES["face-image"]
+        if data:
+            del data['face-image']
+            img = np.fromstring(image.read(),np.uint8)
+            img = cv2.imdecode(img,cv2.IMREAD_UNCHANGED)
+            image_json = json.dumps(img,cls=NumpyEncoder)
+            # data["image"] = image_json
+            # print(img)
+            # img = np.reshape(img,(152,152))
+            img = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)  
+            face_encodings = DeepFace.represent(img,enforce_detection=False,model_name="Facenet512")
+            # data["face"] = json.dumps(face_encodings,cls=NumpyEncoder)
+            data["face"] = face_encodings[0]["embedding"]
+            student = database["Student"].find_one(filter={"gr_number":int(id)})
+            face_data = {
+                "_id":create_unique_object_id(),
+                "student_id":student["_id"],
+                "face_data":data["face"]
+            }
+            database["face_data"].insert_one(document=face_data)
+            # print(face_encodings[0]["embedding"])
+            # print(len(face_encodings[)
+            
+            return JsonResponse(data=data,safe=False)
+        else:
+            return JsonResponse(data={"message":"data is not sended"})
