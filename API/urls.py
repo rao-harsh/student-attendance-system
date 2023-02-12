@@ -16,8 +16,8 @@ urlpatterns = [
     
     
     # Student Routes
-    path("register-face/<str:id>/",views.register_face,name="register-face")
+    path("register-face/<str:id>/",views.register_face,name="register-face"),
     
     #attendance-system routes
-    
+    path("attendance/",views.attendance,name="attendance")
 ]
