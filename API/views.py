@@ -9,14 +9,11 @@ from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import api_view
 from rest_framework import status
-import time
 from deepface import DeepFace
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
 import json
 from mtcnn import MTCNN
-from datetime import datetime 
 # Create your views here.
 
 
@@ -155,7 +152,7 @@ def get_students(request):
 
 
 @api_view(["POST", "PATCH"])
-def manage_biometrics(request, id):
+def manage_biometrics(request):
     user = database[auth_collection].find_one(
         filter={"_id": request.id, "role": request.role})
 
@@ -387,26 +384,142 @@ def get_queries(request):
 def query(request):
     user = database["User"].find_one(
         filter={"_id": request.id, "role": request.role})
-    
+
     if user["role"] == "Student" and user["_id"] == request.id:
         data = request.data if request.data else {}
         if data:
             if "query" not in data:
                 return JsonResponse(data={"message": "Wrong Data Provided!"}, status=status.HTTP_400_BAD_REQUEST)
-            date = datetime.now()
+            date = datetime.datetime.now()
             query_data = {
-                "_id":create_unique_object_id,
-                "student_id":user["_id"],
-                "query":data["query"],
-                "query_raised_date":f"{date.date}-{date.month}-{date.year}"
+                "_id": create_unique_object_id,
+                "student_id": user["_id"],
+                "query": data["query"],
+                "query_raised_date": f"{date.day}-{date.month}-{date.year}"
             }
             print(query_data)
             try:
                 database["query"].insert_one(query_data)
-                return JsonResponse(data={"message":"Query Successfully Submitted"},status=status.HTTP_200_OK)
+                return JsonResponse(data={"message": "Query Successfully Submitted"}, status=status.HTTP_200_OK)
             except:
-                return JsonResponse(data={"message":"Internal Database Erorr"},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return JsonResponse(data={"message": "Internal Server Erorr"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            return JsonResponse(data={"message": "No Data Provided"}, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        return JsonResponse(data={"message": "User Not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+def answer_query(request, id):
+    user = database[auth_collection].find_one(
+        filter={"_id": request.id, "role": request.role})
+
+    if user["role"] == "Faculty" and user["_id"] == request.id:
+        data = request.data if request.data else {}
+        if data:
+            if "answer" not in data:
+                return JsonResponse(data={"message": "Wrong Data Provided!"}, status=status.HTTP_400_BAD_REQUEST)
+            date = datetime.datetime.now()
+            answer_data = {
+                "_id": create_unique_object_id(),
+                "query_id": id,
+                "faculty_id": user["_id"],
+                "answer_of_query": data["answer"],
+                "query_resolved_data": f"{date.day}-{date.month}-{date.year}"
+            }
+            try:
+                database["query_answer"].insert_one(answer_data)
+                return JsonResponse(data={"message": "Answer Successfully Submitted!"}, status=status.HTTP_201_CREATED)
+            except:
+                return JsonResponse(data={"message": "Internal Server Error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            return JsonResponse(data={"message": "No Data Provided"}, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        return JsonResponse(data={"message": "User Not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+@api_view(["POST", "PATCH", "DELETE"])
+def manage_timetable(request, id=None):
+    user = database[auth_collection].find_one(
+        filter={"_id": request.id, "role": request.role})
+    all_fields = ("subject_id", "faculty_id", "division",
+                  "semester_id", "remarks", "room_number", "start_time", "end_time")
+    if user["role"] == "college-admin" and user["_id"] == request.id:
+        data = request.data if request.data else {}
+        
+        if request.method == "DELETE":
+            try:
+                database["timetable"].update_one(
+                    filter={"_id": id}, update={"$set": {"is_deleted": True}})
+                return JsonResponse(data={"message": "Successfully Deleted"}, status=status.HTTP_200_OK)
+            except:
+                return JsonResponse(data={"message": "Internal Server Error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if data:
+            for field in data.keys():
+                if field not in all_fields:
+                    return JsonResponse(data={"message": "Wrong Data Provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+            if request.method == "POST":
+                # required for all fields
+                for field in all_fields:
+                    if field not in data:
+                        return JsonResponse(data={"message": "Wrong Data Provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+                timetable_data = {
+                    "_id": create_unique_object_id(),
+                    "subject_id": data["subject_id"],
+                    "faculty_id": data["faculty_id"],
+                    "semester_id": data["semester_id"],
+                    "division": data["division"],
+                    "remarks": data["remarks"],
+                    "room_number": data["room_number"],
+                    "start_time": data["start_time"],
+                    "end_time": data["end_time"]
+                }
+
+                try:
+                    database["timetable"].insert_one(timetable_data)
+                    return JsonResponse(data={"message": "Timetable Successfully Created"}, status=status.HTTP_201_CREATED)
+                except:
+                    return JsonResponse(data={"message": "Internal Server Error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            elif request.method == "PATCH":
+
+                try:
+                    database["timetable"].find_one_and_update(
+                        filter={"_id": id}, update={"$set": data})
+                    return JsonResponse(data={"message": "Timetable Successfully Updated"}, status=status.HTTP_201_CREATED)
+                except:
+                    return JsonResponse(data={"message": "Internal Server Error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            return JsonResponse(data={"message": "No Data Provided"}, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        return JsonResponse(data={"message": "User Not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+def get_attendance(request,id):
+    user = database[auth_collection].find_one(filter={"_id":request.id,"role":request.role})
+    if user["role"] == "Faculty" and user["_id"] == request.id:
+        attendance_details = database["attendance"].find(filter={"attendance":False})
+        attendance_details = [i for i in attendance_details]
+        return JsonResponse(data=attendance_details,status=status.HTTP_200_OK)
+    elif user["role"] == "Student":
+        attendance_details = database["attendance"].find(filter={"student_id":id})
+        attendance_details = [i for i in attendance_details]
+        return JsonResponse(data=attendance_details,status=status.HTTP_200_OK)
+    else:
+        return JsonResponse(data={"message":"User Not Authorized"},status=status.HTTP_400_BAD_REQUEST)
+
+def correct_attendance(request,id):
+    user = database[auth_collection].find_one(filter={"_id":request.id,"role":request.role})
+    if user["role"] == "Faculty" and user["_id"] == request.id:
+        if request.data["attendance"]:
+            if id:
+                database["attendance"].update_one(filter={"_id":id,"attendance":False},update={"$set":{"attendance":True}})
+                return JsonResponse(data={"message":"Attendance Updates Successfully"},status=status.HTTP_200_OK)
+            else:
+                return JsonResponse(data={"message":"ID not provided"},status=status.HTTP_400_BAD_REQUEST)
         else:
             return JsonResponse(data={"message":"No Data Provided"},status=status.HTTP_400_BAD_REQUEST)
     else:
         return JsonResponse(data={"message":"User Not Authorized"},status=status.HTTP_401_UNAUTHORIZED)
+
