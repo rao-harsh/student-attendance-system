@@ -25,7 +25,7 @@ urlpatterns = [
     
     # Student Routes
     path("manage-biometrics/<str:id>/",views.manage_biometrics,name="manage-biometrics"),
-    # path("query/",views.query,name="query"),
+    path("query/",views.query,name="query"),
     
     #attendance-system routes
     path("attendance/",views.attendance,name="attendance"),
