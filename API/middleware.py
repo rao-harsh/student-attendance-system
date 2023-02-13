@@ -16,7 +16,16 @@ class JWTAuthenticateMiddleware:
         self.allowed_apis = [
             "manage-timetable",
             "manage-student",
-            "get-students"
+            "get-students",
+            "manage-biometrics",
+            "get-timetable",
+            "correc-attendance",
+            "get-queries",
+            "answer-query",
+            "get-attendance",
+            "query",
+            "manage-faculty",
+            "manage-college-admin"
         ]
     
     def __call__(self,request):

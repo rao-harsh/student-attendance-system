@@ -16,6 +16,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 from mtcnn import MTCNN
+from datetime import datetime 
 # Create your views here.
 
 
@@ -83,7 +84,7 @@ def login(request):
             else:
                 return JsonResponse(data={"message": "Incorrect Password"}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            return JsonResponse(data={"message":"User not found"},status=status.HTTP_404_NOT_FOUND)
+            return JsonResponse(data={"message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
     else:
         return JsonResponse(data={"message": "Didn't Receive Login Data"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -153,9 +154,12 @@ def get_students(request):
         return JsonResponse(data={"message": "User not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
 
 
-@api_view(["POST"])
-def register_face(request, id):
-    if request.method == "POST":
+@api_view(["POST", "PATCH"])
+def manage_biometrics(request, id):
+    user = database[auth_collection].find_one(
+        filter={"_id": request.id, "role": request.role})
+
+    if user["role"] == "Student" and user["_id"] == request.idb:
         data = request.data if request.data is not None else {}
         image = request.FILES["face-image"]
         if data:
@@ -164,18 +168,32 @@ def register_face(request, id):
             img = cv2.imdecode(img, cv2.IMREAD_UNCHANGED)
             image_json = json.dumps(img, cls=NumpyEncoder)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            face_encodings = DeepFace.represent(
+            detector = MTCNN()
+            face = detector.detect_faces(img)
+            if len(face) == 0:
+                return JsonResponse(data={"message": "Face not found please upload proper image"}, status=status.HTTP_400_BAD_REQUEST)
+            face_embedding = DeepFace.represent(
                 img, enforce_detection=False, model_name="Facenet512")
-            data["face"] = face_encodings[0]["embedding"]
+            data["face"] = face_embedding[0]["embedding"]
             student = database["Student"].find_one(
                 filter={"gr_number": int(id)})
-            face_data = {
-                "_id": create_unique_object_id(),
-                "student_id": student["_id"],
-                "face_data": data["face"]
-            }
-            database["face_data"].insert_one(document=face_data)
-            return JsonResponse(data=data, safe=False)
+            if request.method == "POST":
+                face_data = {
+                    "_id": create_unique_object_id(),
+                    "student_id": student["_id"],
+                    "face_data": data["face"]
+                }
+                database["face_data"].insert_one(document=face_data)
+                return JsonResponse(data={"message": "Successfully Uploaded"}, status=status.HTTP_201_CREATED)
+            elif request.method == "PATCH":
+                update = {
+                    "$set": {
+                        "face_data": data["face"]
+                    }
+                }
+                face_data = database["face_data"].find_one_and_update(
+                    filter={"student_id": student["_id"]}, update=update)
+                return JsonResponse(data={"message": "Successfully Updated"}, status=status.HTTP_200_OK)
         else:
             return JsonResponse(data={"message": "data is not sended"})
 
@@ -197,54 +215,57 @@ def attendance(request):
             for face in faces:
                 x, y, w, h = face["box"]
                 crop = img[y:y+h, x:x+w]
-                target_embedding = DeepFace.represent(crop,enforce_detection=False,model_name="Facenet512")
+                target_embedding = DeepFace.represent(
+                    crop, enforce_detection=False, model_name="Facenet512")
                 # return JsonResponse(data=face_data)
                 embeddings.append(target_embedding)
-            
-            
+
             for embedding in embeddings:
-                
-                #to find cosine similarity between to faces
+
+                # to find cosine similarity between to faces
                 pipeline = [
                     {
-                        "$addFields":{
-                            "target_embedding":embedding[0]["embedding"]
+                        "$addFields": {
+                            "target_embedding": embedding[0]["embedding"]
                         }
                     },
                     {
-                        "$project":{
-                            "student_id":1,
-                            "cos_sim_params":{
-                                "$reduce":{
-                                    "input":{"$range":[0,{"$size":"$face_data"}]},
-                                    "initialValue":{
-                                        "dot_product":0,
-                                        "doc_2_sum":0,
-                                        "target_2_sum":0
+                        "$project": {
+                            "student_id": 1,
+                            "cos_sim_params": {
+                                "$reduce": {
+                                    "input": {"$range": [0, {"$size": "$face_data"}]},
+                                    "initialValue": {
+                                        "dot_product": 0,
+                                        "doc_2_sum": 0,
+                                        "target_2_sum": 0
                                     },
-                                    "in":{
-                                        "$let":{
-                                            "vars":{
-                                                "doc_elem":{"$arrayElemAt":["$face_data","$$this"]},
-                                                "target_elem":{"$arrayElemAt":["$target_embedding","$$this"]}
+                                    "in": {
+                                        "$let": {
+                                            "vars": {
+                                                "doc_elem": {"$arrayElemAt": ["$face_data", "$$this"]},
+                                                "target_elem":{"$arrayElemAt": ["$target_embedding", "$$this"]}
                                             },
                                             "in":{
-                                                "dot_product":{
-                                                    "$add":[
+                                                "dot_product": {
+                                                    "$add": [
                                                         "$$value.dot_product",
-                                                        {"$multiply":["$$doc_elem","$$target_elem"]}
+                                                        {"$multiply": [
+                                                            "$$doc_elem", "$$target_elem"]}
                                                     ]
                                                 },
                                                 "doc_2_sum":{
-                                                    "$add":[
+                                                    "$add": [
                                                         "$$value.doc_2_sum",
-                                                        {"$pow":["$$doc_elem",2]}
+                                                        {"$pow": [
+                                                            "$$doc_elem", 2]}
                                                     ]
                                                 },
                                                 "target_2_sum":{
-                                                    "$add":[
+                                                    "$add": [
                                                         "$$value.target_2_sum",
-                                                        {"$pow":["$$target_elem",2]}
+                                                        {"$pow": [
+                                                            "$$target_elem", 2]}
                                                     ]
                                                 }
                                             }
@@ -255,15 +276,15 @@ def attendance(request):
                         }
                     },
                     {
-                        "$project":{
-                            "_id":1,
-                            "student_id":1,
-                            "cos_sim":{
-                                "$divide":[
+                        "$project": {
+                            "_id": 1,
+                            "student_id": 1,
+                            "cos_sim": {
+                                "$divide": [
                                     "$cos_sim_params.dot_product",
                                     {
-                                        "$sqrt":{
-                                            "$multiply":[
+                                        "$sqrt": {
+                                            "$multiply": [
                                                 "$cos_sim_params.doc_2_sum",
                                                 "$cos_sim_params.target_2_sum"
                                             ]
@@ -274,28 +295,30 @@ def attendance(request):
                         },
                     },
                     {
-                        "$match":{
-                            "cos_sim":{
-                                "$gte":0.5
+                        "$match": {
+                            "cos_sim": {
+                                "$gte": 0.5
                             }
                         }
                     },
                     {
-                        "$sort":{
-                            "cos_sim":-1
+                        "$sort": {
+                            "cos_sim": -1
                         }
                     },
                     {
-                        "$limit":1
+                        "$limit": 1
                     }
                 ]
-                student_details = database["face_data"].aggregate(pipeline=pipeline)
+                student_details = database["face_data"].aggregate(
+                    pipeline=pipeline)
                 face_data.append(list(student_details))
             all_present = []
             all_student = database["Student"].find()
             for face in face_data:
                 if face != []:
-                    student = database["Student"].find_one(filter={"_id":face[0]["student_id"]})
+                    student = database["Student"].find_one(
+                        filter={"_id": face[0]["student_id"]})
                     all_present.append(student)
             present_ids = [i["_id"] for i in all_present]
             # print(_ids)
@@ -318,19 +341,72 @@ def attendance(request):
             # for i in absent_ids:
             #     if i in present_ids:
             #         absent_ids.remove(i)
-            
+
             present_ids = set(present_ids)
             absent_ids = set(absent_ids)
-            
+
             absent_ids = list(absent_ids - present_ids)
             for absent in absent_ids:
                 # absent_student.append(list(database["Student"].find_one({"_id":absent},{"_id":1,"roll_number":1})))
-                student = database["Student"].find_one({"_id":absent},{"_id":1,"roll_number":1})
+                student = database["Student"].find_one(
+                    {"_id": absent}, {"_id": 1, "roll_number": 1})
                 absent_student.append(student)
             present_student = []
             for present in present_ids:
-                student = database["Student"].find_one({"_id":present},{"_id":1,"roll_number":1})
+                student = database["Student"].find_one(
+                    {"_id": present}, {"_id": 1, "roll_number": 1})
                 present_student.append(student)
             # present_absent_data = present_student + absent_student
             print(all_present)
-            return JsonResponse(data={"present":present_student,"absent":absent_student})
+            return JsonResponse(data={"present": present_student, "absent": absent_student})
+
+
+def get_timetable(request):
+    user = database["User"].find_one(
+        filter={"_id": request.id, "role": request.role})
+    if user["role"] == "college-admin" and user["_id"] == request.id:
+        data = database["timetable"].find()
+        data = [i for i in data]
+        return JsonResponse(data=data, status=status.HTTP_200_OK)
+    else:
+        return JsonResponse(data={"message": "User not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+def get_queries(request):
+    user = database["User"].find_one(
+        filter={"_id": request.id, "role": request.role})
+    if user["role"] == "Faculty" and user["_id"] == request.id:
+        data = database["query"].find()
+        data = [i for i in data]
+        return JsonResponse(data=data, status=status.HTTP_200_OK)
+    else:
+        return JsonResponse(data={"message": "User not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+@api_view(["POST"])
+def query(request):
+    user = database["User"].find_one(
+        filter={"_id": request.id, "role": request.role})
+    
+    if user["role"] == "Student" and user["_id"] == request.id:
+        data = request.data if request.data else {}
+        if data:
+            if "query" not in data:
+                return JsonResponse(data={"message": "Wrong Data Provided!"}, status=status.HTTP_400_BAD_REQUEST)
+            date = datetime.now()
+            query_data = {
+                "_id":create_unique_object_id,
+                "student_id":user["_id"],
+                "query":data["query"],
+                "query_raised_date":f"{date.date}-{date.month}-{date.year}"
+            }
+            print(query_data)
+            try:
+                database["query"].insert_one(query_data)
+                return JsonResponse(data={"message":"Query Successfully Submitted"},status=status.HTTP_200_OK)
+            except:
+                return JsonResponse(data={"message":"Internal Database Erorr"},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            return JsonResponse(data={"message":"No Data Provided"},status=status.HTTP_400_BAD_REQUEST)
+    else:
+        return JsonResponse(data={"message":"User Not Authorized"},status=status.HTTP_401_UNAUTHORIZED)
