@@ -199,8 +199,9 @@ def manage_biometrics(request):
 def attendance(request):
     if request.method == "POST":
         data = request.data if request.data is not None else {}
-        image = request.FILES["class-frames"]
-        if data:
+        # image = request.FILES["class-frames"]
+        image = data["class-frames"]
+        if image:
             face_data = []
             del data["class-frames"]
             img = np.fromstring(image.read(), np.uint8)
@@ -355,6 +356,27 @@ def attendance(request):
                 present_student.append(student)
             # present_absent_data = present_student + absent_student
             print(all_present)
+            instances = []
+            for present in present_student:
+                instance = {}
+                instance["_id"] = create_unique_object_id()
+                instance["student_id"] = present["_id"]
+                instance["roll_number"] = present["roll_number"]
+                instance["attendance"] = True
+                instances.append(instance)
+            for absent in absent_student:
+                instance = {}
+                instance["_id"] = create_unique_object_id()
+                instance["student_id"] = absent["_id"]
+                instance["roll_number"] = absent["roll_number"]
+                instance["attendance"] = False
+                instances.append(instance)
+            
+            try:
+                database["attendance"].insert_many(instances)
+                return JsonResponse(data={"present": present_student, "absent": absent_student},status=status.HTTP_200_OK)
+            except:
+                return JsonResponse(data={"message":"Internal Server Error"},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return JsonResponse(data={"present": present_student, "absent": absent_student})
 
 

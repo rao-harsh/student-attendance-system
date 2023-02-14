@@ -25,7 +25,8 @@ class JWTAuthenticateMiddleware:
             "get-attendance",
             "query",
             "manage-faculty",
-            "manage-college-admin"
+            "manage-college-admin",
+            "login"
         ]
     
     def __call__(self,request):
