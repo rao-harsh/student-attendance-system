@@ -19,14 +19,14 @@ class JWTAuthenticateMiddleware:
             "get-students",
             "manage-biometrics",
             "get-timetable",
-            "correc-attendance",
+            "correct-attendance",
             "get-queries",
             "answer-query",
             "get-attendance",
             "query",
             "manage-faculty",
             "manage-college-admin",
-            "login"
+            "get-required-timetable-details"
         ]
     
     def __call__(self,request):
@@ -45,9 +45,6 @@ class JWTAuthenticateMiddleware:
             except:
                 return JsonResponse(data={"message":"Token not found!"},status=status.HTTP_401_UNAUTHORIZED)
             
-            if view_name == "reset-password":
-                token = base64.b64decode(token).decode()
-            
             result = JWTAuthenticateMiddleware.has_key(token)
             
             if type(result) == JsonResponse:
@@ -57,8 +54,8 @@ class JWTAuthenticateMiddleware:
                 print("has_key : ", result)
                 #checking if expired
                 if datetime.datetime.fromtimestamp(result['exp']) > datetime.datetime.now():
-                    request.id = result['id']['id']
-                    request.role = result['id']['role']
+                    request.id = result['id']
+                    request.role = result['role']
             else:
                 return JsonResponse(data={"message":"Token Expired!\nLogin Again"},status=status.HTTP_400_BAD_REQUEST)
         

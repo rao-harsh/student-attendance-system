@@ -41,7 +41,7 @@ def signup(request):
         if database[auth_collection].find_one({"email": data["email"]}) is None:
             try:
                 database[auth_collection].insert_one(data)
-                return JsonResponse(data=data, status=status.HTTP_201_CREATED)
+                return JsonResponse(data={"message": "User Registered"}, status=status.HTTP_201_CREATED)
             except:
                 return JsonResponse(data={"message": "User not Sign up"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         else:
@@ -53,7 +53,7 @@ def signup(request):
 @api_view(["POST"])
 def login(request):
     data = request.data if request.data is not None else {}
-    if data != {}:
+    if data:
         email = data["email"]
         password = data["password"]
 
@@ -64,18 +64,14 @@ def login(request):
 
         if user is not None:
             if pwd_context.verify(password, user["password"]):
-                token = jwt.encode({
-                    "id": {
-                        "id": user["_id"],
-                        "role": user["role"]
-                    },
+                payload = {
+                    "id": user["_id"],
+                    "role": user["role"],
                     "exp": datetime.datetime.now() + datetime.timedelta(days=jwt_life)
-                },
-                    jwt_secret,
-                    algorithm="HS256"
-                )
+                }
+                token = jwt.encode(payload, jwt_secret, algorithm="HS256")
                 if type(token) == str:
-                    return JsonResponse(data={"message": "Successfully Logged In", "token": token}, status=status.HTTP_200_OK)
+                    return JsonResponse(data={"message": "Successfully Logged In", "token": token, "role": user["role"]}, status=status.HTTP_200_OK)
                 else:
                     return JsonResponse(data={"message": "Token not created"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             else:
@@ -86,7 +82,7 @@ def login(request):
         return JsonResponse(data={"message": "Didn't Receive Login Data"}, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view(["POST", "GET", "PATCH"])
+@api_view(["POST", "GET", "PATCH", "DELETE"])
 def manage_student(request, id):
     if request.method == "POST":
         college_admin = database["User"].find_one(
@@ -118,17 +114,18 @@ def manage_student(request, id):
             data = request.data if request.data is not None else {}
             if id is not None and data is not None:
                 print(id)
-                user = database["Student"].find_one(filter={"_id": id})
+                user = database["Student"].find_one(filter={"User_ID": id})
                 if user:
                     newValues = {"$set": data}
                     print(newValues)
-                    database["Student"].update_one(
-                        filter={"_id": id}, update=newValues)
-                    newData = database["Student"].find_one(filter={"_id": id})
-                    print(newData)
-                    return JsonResponse(data=newData)
+                    try:
+                        database["Student"].update_one(
+                            filter={"User_ID": id}, update=newValues)
+                        return JsonResponse(data={"message": "Student Updated Successfully"}, status=status.HTTP_200_OK)
+                    except:
+                        return JsonResponse(data={"message": "Internal Server Error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 else:
-                    return JsonResponse(data={"message": "Student Not found"})
+                    return JsonResponse(data={"message": "Student Not found"}, status=status.HTTP_404_NOT_FOUND)
     elif request.method == "GET":
         user = database["User"].find_one(
             filter={"_id": request.id, "role": request.role})
@@ -137,6 +134,18 @@ def manage_student(request, id):
             data = database["User"].find(filter={"role": "Student"})
             data = [i for i in data]
             return JsonResponse(data=data, status=status.HTTP_200_OK, safe=False)
+        else:
+            return JsonResponse(data={"message": "User not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
+    elif request.method == "DELETE":
+        user = database["User"].find_one(
+            filter={"_id": request.id, "role": request.role})
+
+        if user["role"] == "college-admin" and user["_id"] == request.id:
+            database["Student"].update_one(filter={"User_ID": id}, update={
+                                           "$set": {"is_deleted": True}})
+            return JsonResponse(data={"message": "User deleted"}, status=status.HTTP_200_OK)
+        else:
+            return JsonResponse(data={"message": "User not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 def get_students(request):
@@ -144,8 +153,38 @@ def get_students(request):
         filter={"_id": request.id, "role": request.role})
 
     if user["role"] == "college-admin" and user["_id"] == request.id:
-        data = database["User"].find(filter={"role": "Student"})
-        data = [i for i in data]
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "User",
+                    "localField": "User_ID",
+                    "foreignField": "_id",
+                    "as": "user"
+                }
+            },
+            {
+                "$project": {
+                    "_id": 1,
+                    "gr_number": 1,
+                    "roll_number": 1,
+                    "user.first_name": 1,
+                    "user.last_name": 1,
+                    "user.contact_number": 1,
+                    "user.email": 1,
+                    "user._id": 1,
+                    "is_deleted": 1
+                }
+            },
+            {
+                "$match": {
+                    "is_deleted": {
+                        "$ne": True
+                    }
+                }
+            }
+        ]
+        data = database["Student"].aggregate(pipeline)
+        data = list(data)
         return JsonResponse(data=data, status=status.HTTP_200_OK, safe=False)
     else:
         return JsonResponse(data={"message": "User not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
@@ -156,24 +195,29 @@ def manage_biometrics(request):
     user = database[auth_collection].find_one(
         filter={"_id": request.id, "role": request.role})
 
-    if user["role"] == "Student" and user["_id"] == request.idb:
+    if user["role"] == "Student" and user["_id"] == request.id:
         data = request.data if request.data is not None else {}
         image = request.FILES["face-image"]
         if data:
             del data['face-image']
             img = np.fromstring(image.read(), np.uint8)
             img = cv2.imdecode(img, cv2.IMREAD_UNCHANGED)
+            print(img)
             image_json = json.dumps(img, cls=NumpyEncoder)
+            print(image_json)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            print(img)
             detector = MTCNN()
             face = detector.detect_faces(img)
+            print(face)
             if len(face) == 0:
                 return JsonResponse(data={"message": "Face not found please upload proper image"}, status=status.HTTP_400_BAD_REQUEST)
             face_embedding = DeepFace.represent(
                 img, enforce_detection=False, model_name="Facenet512")
             data["face"] = face_embedding[0]["embedding"]
             student = database["Student"].find_one(
-                filter={"gr_number": int(id)})
+                filter={"User_ID": request.id})
+            print(request.id)
             if request.method == "POST":
                 face_data = {
                     "_id": create_unique_object_id(),
@@ -189,21 +233,21 @@ def manage_biometrics(request):
                     }
                 }
                 face_data = database["face_data"].find_one_and_update(
-                    filter={"student_id": student["_id"]}, update=update)
+                    filter={"gr_number": student["_id"]}, update=update)
                 return JsonResponse(data={"message": "Successfully Updated"}, status=status.HTTP_200_OK)
         else:
             return JsonResponse(data={"message": "data is not sended"})
+    else:
+        return JsonResponse(data={"message": "User is not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 @api_view(["POST"])
 def attendance(request):
     if request.method == "POST":
-        data = request.data if request.data is not None else {}
-        # image = request.FILES["class-frames"]
-        image = data["class-frames"]
+        image = request.FILES["class-frames"]
+        # image = data["class-frames"]
         if image:
             face_data = []
-            del data["class-frames"]
             img = np.fromstring(image.read(), np.uint8)
             img = cv2.imdecode(img, cv2.IMREAD_UNCHANGED)
             detector = MTCNN()
@@ -347,12 +391,12 @@ def attendance(request):
             for absent in absent_ids:
                 # absent_student.append(list(database["Student"].find_one({"_id":absent},{"_id":1,"roll_number":1})))
                 student = database["Student"].find_one(
-                    {"_id": absent}, {"_id": 1, "roll_number": 1})
+                    {"_id": absent}, {"_id": 1, "roll_number": 1, 'User_ID': 1})
                 absent_student.append(student)
             present_student = []
             for present in present_ids:
                 student = database["Student"].find_one(
-                    {"_id": present}, {"_id": 1, "roll_number": 1})
+                    {"_id": present}, {"_id": 1, "roll_number": 1, 'User_ID': 1})
                 present_student.append(student)
             # present_absent_data = present_student + absent_student
             print(all_present)
@@ -371,33 +415,124 @@ def attendance(request):
                 instance["roll_number"] = absent["roll_number"]
                 instance["attendance"] = False
                 instances.append(instance)
-            
+
             try:
                 database["attendance"].insert_many(instances)
-                return JsonResponse(data={"present": present_student, "absent": absent_student},status=status.HTTP_200_OK)
+                return JsonResponse(data={"present": present_student, "absent": absent_student}, status=status.HTTP_200_OK)
             except:
-                return JsonResponse(data={"message":"Internal Server Error"},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            return JsonResponse(data={"present": present_student, "absent": absent_student})
-
+                return JsonResponse(data={"message": "Internal Server Error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            return JsonResponse(data={"message": "Image not Found"}, status=status.HTTP_400_BAD_REQUEST)
 
 def get_timetable(request):
     user = database["User"].find_one(
         filter={"_id": request.id, "role": request.role})
     if user["role"] == "college-admin" and user["_id"] == request.id:
-        data = database["timetable"].find()
-        data = [i for i in data]
-        return JsonResponse(data=data, status=status.HTTP_200_OK)
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "subject",
+                    "localField": "subject_id",
+                    "foreignField": "_id",
+                    "as": "subject"
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "User",
+                    "localField": "faculty_id",
+                    "foreignField": "_id",
+                    "as": "faculty"
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "semester",
+                    "localField": "semester_id",
+                    "foreignField": "_id",
+                    "as": "semester"
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "division",
+                    "localField": "division",
+                    "foreignField": "_id",
+                    "as": "division"
+                }
+            },
+            {"$unwind": "$subject"},
+            {"$unwind": "$faculty"},
+            {"$unwind": "$division"},
+            {"$unwind": "$semester"},
+            {
+                "$project": {
+                    "_id": 1,
+                    "remarks": 1,
+                    "room_number": 1,
+                    "start_time": 1,
+                    "end_time": 1,
+                    "faculty.first_name": 1,
+                    "faculty.last_name": 1,
+                    "semester.semester_name": 1,
+                    "division.division_name": 1,
+                    "subject.subject_name": 1
+                }
+            }
+        ]
+        data = database["timetable"].aggregate(pipeline)
+        data = list(data)
+        return JsonResponse(data=data, status=status.HTTP_200_OK, safe=False)
     else:
         return JsonResponse(data={"message": "User not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
 
 
-def get_queries(request):
+def get_queries(request,id=None):
     user = database["User"].find_one(
         filter={"_id": request.id, "role": request.role})
     if user["role"] == "Faculty" and user["_id"] == request.id:
-        data = database["query"].find()
+        
+        if id is not None:
+            query = database["query"].find_one({"_id":id},{"query":1})
+            query = dict(query)
+            print(query)
+            return JsonResponse(query,status= status.HTTP_200_OK,safe=False)
+        
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "Student",
+                    "localField": "student_id",
+                    "foreignField": "_id",
+                    "as": "student"
+                }
+            },
+            {"$unwind": "$student"},
+            {
+                "$lookup": {
+                    "from": "User",
+                    "localField": "student.User_ID",
+                    "foreignField": "_id",
+                    "as": "user"
+                }
+            },
+            {"$unwind": "$user"},
+            {
+                "$project": {
+                    "_id": 1,
+                    "query":1,
+                    "query_raised_date":1,
+                    "student.gr_number": 1,
+                    "student.roll_number": 1,
+                    "user.first_name": 1,
+                    "user.last_name": 1,
+                    "user.email":1
+                }
+            }
+        ]
+        data = database["query"].aggregate(pipeline)
         data = [i for i in data]
-        return JsonResponse(data=data, status=status.HTTP_200_OK)
+        return JsonResponse(data=data, status=status.HTTP_200_OK, safe=False)
     else:
         return JsonResponse(data={"message": "User not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -413,9 +548,10 @@ def query(request):
             if "query" not in data:
                 return JsonResponse(data={"message": "Wrong Data Provided!"}, status=status.HTTP_400_BAD_REQUEST)
             date = datetime.datetime.now()
+            student_details = database["Student"].find_one({"User_ID":user["_id"]},{"_id":1})
             query_data = {
-                "_id": create_unique_object_id,
-                "student_id": user["_id"],
+                "_id": create_unique_object_id(),
+                "student_id": student_details["_id"],
                 "query": data["query"],
                 "query_raised_date": f"{date.day}-{date.month}-{date.year}"
             }
@@ -430,7 +566,7 @@ def query(request):
     else:
         return JsonResponse(data={"message": "User Not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
 
-
+@api_view(["POST"])
 def answer_query(request, id):
     user = database[auth_collection].find_one(
         filter={"_id": request.id, "role": request.role})
@@ -467,7 +603,7 @@ def manage_timetable(request, id=None):
                   "semester_id", "remarks", "room_number", "start_time", "end_time")
     if user["role"] == "college-admin" and user["_id"] == request.id:
         data = request.data if request.data else {}
-        
+
         if request.method == "DELETE":
             try:
                 database["timetable"].update_one(
@@ -518,30 +654,97 @@ def manage_timetable(request, id=None):
         return JsonResponse(data={"message": "User Not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
 
 
-def get_attendance(request,id):
-    user = database[auth_collection].find_one(filter={"_id":request.id,"role":request.role})
+def get_attendance(request, id=None):
+    user = database[auth_collection].find_one(
+        filter={"_id": request.id, "role": request.role})
     if user["role"] == "Faculty" and user["_id"] == request.id:
-        attendance_details = database["attendance"].find(filter={"attendance":False})
-        attendance_details = [i for i in attendance_details]
-        return JsonResponse(data=attendance_details,status=status.HTTP_200_OK)
+        pipeline = [
+            {
+                "$lookup": {
+                    'from': 'Student',
+                    'localField': 'student_id',
+                    'foreignField': '_id',
+                    'as': 'student_details'
+                }
+            },
+            {"$unwind": "$student_details"},
+            {
+                "$lookup": {
+                    'from': 'User',
+                    'localField': 'student_details.User_ID',
+                    'foreignField': '_id',
+                    'as': 'user'
+                }
+            },
+            {"$unwind": "$user"},
+            {
+                "$project": {
+                    "_id": 1,
+                    "roll_number": 1,
+                    "attendance": 1,
+                    "student_details.gr_number": 1,
+                    "student_details.roll_number": 1,
+                    "user.first_name": 1,
+                    "user.last_name": 1
+                }
+            },
+            {
+                "$match": {
+                    "attendance": {
+                        "$eq": False
+                    }
+                }
+            },
+            {
+                "$sort": {
+                    "roll_number": 1
+                }
+            }
+        ]
+
+        attendance_details = database["attendance"].aggregate(pipeline)
+        attendance_details = list(attendance_details)
+        return JsonResponse(data=attendance_details, status=status.HTTP_200_OK, safe=False)
     elif user["role"] == "Student":
-        attendance_details = database["attendance"].find(filter={"student_id":id})
+        attendance_details = database["attendance"].find(
+            filter={"student_id": id})
         attendance_details = [i for i in attendance_details]
-        return JsonResponse(data=attendance_details,status=status.HTTP_200_OK)
+        return JsonResponse(data=attendance_details, status=status.HTTP_200_OK, safe=False)
     else:
-        return JsonResponse(data={"message":"User Not Authorized"},status=status.HTTP_400_BAD_REQUEST)
+        return JsonResponse(data={"message": "User Not Authorized"}, status=status.HTTP_400_BAD_REQUEST)
 
-def correct_attendance(request,id):
-    user = database[auth_collection].find_one(filter={"_id":request.id,"role":request.role})
+
+def correct_attendance(request, id):
+    user = database[auth_collection].find_one(
+        filter={"_id": request.id, "role": request.role})
     if user["role"] == "Faculty" and user["_id"] == request.id:
-        if request.data["attendance"]:
-            if id:
-                database["attendance"].update_one(filter={"_id":id,"attendance":False},update={"$set":{"attendance":True}})
-                return JsonResponse(data={"message":"Attendance Updates Successfully"},status=status.HTTP_200_OK)
-            else:
-                return JsonResponse(data={"message":"ID not provided"},status=status.HTTP_400_BAD_REQUEST)
+        if id:
+            database["attendance"].update_one(
+                filter={"_id": id, "attendance": False}, update={"$set": {"attendance": True}})
+            return JsonResponse(data={"message": "Attendance Updated Successfully"}, status=status.HTTP_200_OK)
         else:
-            return JsonResponse(data={"message":"No Data Provided"},status=status.HTTP_400_BAD_REQUEST)
+            return JsonResponse(data={"message": "ID not provided"}, status=status.HTTP_400_BAD_REQUEST)
     else:
-        return JsonResponse(data={"message":"User Not Authorized"},status=status.HTTP_401_UNAUTHORIZED)
+        return JsonResponse(data={"message": "User Not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
 
+
+def required_timetable_details(request):
+    user = database[auth_collection].find_one(
+        filter={"_id": request.id, "role": request.role})
+
+    if user["role"] == "college-admin" and user["_id"] == request.id:
+        semester_details = list(database["semester"].find())
+        faculty_details = list(database["User"].find({"role": "Faculty"}, {
+                               "_id": 1, "first_name": 1, "last_name": 1}))
+        subject_details = list(database["subject"].find(
+            {}, {"_id": 1, "subject_name": 1, "subject_type": 1}))
+        division_details = list(database["division"].find())
+        data = {
+            "semester_details": semester_details,
+            "faculty_details": faculty_details,
+            "subject_details": subject_details,
+            "division_details": division_details
+        }
+        return JsonResponse(data=data, status=status.HTTP_200_OK)
+    else:
+        return JsonResponse(data={"message": "User not Authorized"}, status=status.HTTP_401_UNAUTHORIZED)
